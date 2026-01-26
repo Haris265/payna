@@ -138,6 +138,15 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 MEDIA_URL = '/media/'
 MEDIA_ROOT = (BASE_DIR / 'media')
 
+# MTN PAYMENT SETTINGS
+MTN_SUBSCRIPTION_KEY = os.getenv("MTN_SUBSCRIPTION_KEY")
+MTN_BASE_URL = os.getenv("MTN_BASE_URL")
+MTN_ENVIRONMENT = os.getenv("MTN_ENVIRONMENT")
+MTN_CALLBACK_HOST = os.getenv("MTN_CALLBACK_HOST")
+MTN_API_USER_ID = os.getenv("MTN_API_USER_ID")
+MTN_API_KEY = os.getenv("MTN_API_KEY")
+
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/3.2/ref/settings/#default-auto-field
 

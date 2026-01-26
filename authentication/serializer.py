@@ -1,5 +1,6 @@
 from django.contrib.auth.hashers import check_password
 from passlib.hash import django_pbkdf2_sha256 as handler
+from rest_framework import serializers
 from rest_framework.serializers import (
     ModelSerializer,
     Serializer,
@@ -7,7 +8,8 @@ from rest_framework.serializers import (
     ValidationError
 )
 from authentication.models import (
-    UserModel
+    UserModel,
+    TransactionModel
 )
 
 class UserSignupSerializer(ModelSerializer):
@@ -67,4 +69,26 @@ class UserLoginSerializer(Serializer):
             raise ValidationError({"phone_number": "This account is disabled"})
         
         return user
+
+
+class MerchantQRSerializer(serializers.ModelSerializer):
+    """Serializer to show Merchant details in QR"""
+    class Meta:
+        model = UserModel
+        fields = ['id', 'full_name', 'merchant_code', 'phone_number']
+
+class InitiatePaymentSerializer(serializers.Serializer):
+    """Input validation for paying"""
+    # merchant_id = serializers.UUIDField(required=True)
+    merchant_code = serializers.CharField(required=True)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
+
+class TransactionSerializer(serializers.ModelSerializer):
+    """Response serializer"""
+    sender_name = serializers.CharField(source='sender.full_name', read_only=True)
+    receiver_name = serializers.CharField(source='receiver.full_name', read_only=True)
+
+    class Meta:
+        model = TransactionModel
+        fields = '__all__'
     
