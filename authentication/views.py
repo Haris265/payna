@@ -1,17 +1,36 @@
 import os
+import uuid
 from rest_framework.viewsets import ModelViewSet
+from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from core.permission.user_permission import UserGeneralAuthorization
 from rest_framework.status import (
     HTTP_200_OK,
     HTTP_400_BAD_REQUEST,
     HTTP_500_INTERNAL_SERVER_ERROR,
+    HTTP_403_FORBIDDEN,
+    HTTP_503_SERVICE_UNAVAILABLE,
+    HTTP_202_ACCEPTED
+)
+from core.mtn_service import (
+    MTNService
+)
+from core.choices import (
+    TransactionStatusChoices
 )
 from core.helpers import handle_serializer_exception
 from core.jwt_token import generate_jwt_payload
-from .serializer import (
+from authentication.serializer import (
     UserLoginSerializer, 
-    UserSignupSerializer
+    UserSignupSerializer,
+    TransactionSerializer,
+    MerchantQRSerializer,
+    InitiatePaymentSerializer
+)
+from authentication.models import (
+    UserModel,
+    TransactionModel
 )
 
 # Create your views here.
@@ -92,3 +111,111 @@ class UserAuthViewSet(ModelViewSet):
             return Response({
                 "status": False, "message": str(swr)
                 },status=HTTP_500_INTERNAL_SERVER_ERROR,)
+        
+class UserPaymentWithMTN(ModelViewSet):
+    @action(detail=False, methods=["GET"], permission_classes=[UserGeneralAuthorization])
+    def my_qr(self, request):
+        if request.user_instance.role != UserModel.Role.MERCHANT:
+            return Response({"error": "Only merchants can generate QR codes"}, status=HTTP_403_FORBIDDEN)
+        serializer = MerchantQRSerializer(request.user_instance)
+        return Response({
+            "status": True,
+            "message": "Qr code retrieve successfully",
+            "data": serializer.data,
+        }, status=HTTP_200_OK)
+    
+    @action(detail=False, methods=["POST"], permission_classes=[UserGeneralAuthorization])
+    def payment(self, request):
+        # 1. Validate Input
+        serializer = InitiatePaymentSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response ({
+                "status": False,
+                "message": serializer.errors 
+            }, status=HTTP_400_BAD_REQUEST)
+
+        req_merchant_code = serializer.validated_data['merchant_code']
+        amount = serializer.validated_data['amount']
+        user = request.user_instance
+        try:
+            merchant = UserModel.objects.get(merchant_code=req_merchant_code, role=UserModel.Role.MERCHANT)
+        except UserModel.DoesNotExist:
+            return Response({"error": "Invalid Merchant Code."}, status=HTTP_400_BAD_REQUEST)
+        transaction_ref_id = str(uuid.uuid4())
+        transaction = TransactionModel.objects.create(
+            sender=user,
+            receiver=merchant,
+            amount=amount,
+            transaction_ref_id=transaction_ref_id,
+            status=TransactionStatusChoices.PENDING
+        )
+        payer_phone = "56733123453" 
+        token = MTNService.generate_access_token()
+        if not token:
+            return Response({"error": "MTN System error (Token Generation Failed)"}, status=HTTP_503_SERVICE_UNAVAILABLE)
+
+        is_success, api_message = MTNService.request_to_pay(
+            token=token,
+            amount=amount,
+            phone_number=payer_phone, 
+            transaction_ref_id=transaction_ref_id
+        )
+
+        if is_success:
+            return Response({
+                "message": "Payment request sent. Waiting for approval.",
+                "transaction_ref_id": transaction_ref_id,
+                "status": "PENDING"
+            }, status=HTTP_202_ACCEPTED)
+        else:
+            # Failed Case
+            transaction.status = TransactionStatusChoices.FAILED
+            transaction.mtn_response_data = {"error_detail": api_message}
+            transaction.save()
+            
+            return Response({
+                "status": False,
+                "error": "Failed to initiate payment",
+                "detail": api_message 
+            }, status=HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['GET'], permission_classes=[UserGeneralAuthorization])
+    def check_status(self, request):
+        transaction_ref_id = request.query_params.get('transaction_ref_id')
+        
+        if not transaction_ref_id:
+            return Response({"error": "ref_id is required"}, status=400)
+
+        transaction = get_object_or_404(TransactionModel, transaction_ref_id=transaction_ref_id)
+
+        if request.user_instance != transaction.sender and request.user_instance != transaction.receiver:
+            return Response({"error": "Unauthorized"}, status=403)
+
+        if transaction.status == TransactionStatusChoices.SUCCESS:
+            return Response({"status": "SUCCESS", "data": TransactionSerializer(transaction).data})
+
+        token = MTNService.generate_access_token()
+        mtn_data = MTNService.check_status(token, transaction_ref_id)
+        
+        # --- DEBUGGING LINE (Terminal me check karein kya aa raha hai) ---
+        print("MTN RESPONSE:", mtn_data) 
+
+        if mtn_data:
+            mtn_status = mtn_data.get("status")
+            
+            # === CHANGE IS HERE ===
+            # MTN "SUCCESSFUL" bhejta hai, "SUCCESS" nahi.
+            # Hum safety ke liye dono check kar lete hain.
+            if mtn_status in ["SUCCESS", "SUCCESSFUL"]: 
+                transaction.status = TransactionStatusChoices.SUCCESS
+                transaction.mtn_response_data = mtn_data
+                transaction.save()
+                return Response({"status": "SUCCESS", "data": TransactionSerializer(transaction).data})
+            
+            elif mtn_status == "FAILED":
+                transaction.status = TransactionStatusChoices.FAILED
+                transaction.mtn_response_data = mtn_data
+                transaction.save()
+                return Response({"status": "FAILED", "reason": mtn_data.get("reason")})
+
+        return Response({"status": "PENDING", "message": "Waiting for user approval..."})
