@@ -1,0 +1,17 @@
+Django==5.2.8
+django-cleanup==9.0.0
+django-cors-headers==4.9.0
+djangorestframework==3.16.1
+PyJWT==2.10.1
+Pillow
+python-dotenv
+passlib==1.7.4
+python-decouple==3.8
+boto3==1.42.5
+django-storages==1.14.6
+
+
+
+
+
+
