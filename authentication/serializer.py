@@ -7,6 +7,9 @@ from rest_framework.serializers import (
     CharField,
     ValidationError
 )
+from authentication.utils import (
+    validate_mtn_phone_format
+)
 from authentication.models import (
     UserModel,
     TransactionModel
@@ -28,6 +31,18 @@ class UserSignupSerializer(ModelSerializer):
             "role",          
             "merchant_code"
         ]
+    
+    def validate_phone_number(self, value):
+        """
+        DRF automatically calls this method for the 'phone_number' field.
+        """
+        try:
+            cleaned_phone = validate_mtn_phone_format(value)
+            if UserModel.objects.filter(phone_number=cleaned_phone).exists():
+                raise ValidationError("This phone number is already registered.")
+            return cleaned_phone
+        except ValidationError as e:
+            raise ValidationError(e.detail)
         
     def validate(self, data): 
         """Custom validation for password matching"""
@@ -84,11 +99,21 @@ class InitiatePaymentSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=True)
 
 class TransactionSerializer(serializers.ModelSerializer):
-    """Response serializer"""
     sender_name = serializers.CharField(source='sender.full_name', read_only=True)
     receiver_name = serializers.CharField(source='receiver.full_name', read_only=True)
+    status = serializers.CharField(source='get_status_display', read_only=True)
 
     class Meta:
         model = TransactionModel
-        fields = '__all__'
+        fields = [
+            'id',
+            'sender_name',
+            'receiver_name',
+            'amount',
+            'currency',
+            'transaction_ref_id',
+            'status',
+            'mtn_response_data',
+            # 'created_at', 
+        ]
     

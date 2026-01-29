@@ -115,7 +115,7 @@ class TransactionModel(BaseModel):
     sender = models.ForeignKey(UserModel, on_delete=models.CASCADE, related_name="sent_transactions")
     receiver = models.ForeignKey(UserModel, on_delete=models.CASCADE, related_name="received_transactions")
     amount = models.DecimalField(max_digits=12, decimal_places=2)
-    currency = models.CharField(max_length=10, default="EUR") 
+    currency = models.CharField(max_length=10, default="USD") 
     transaction_ref_id = models.CharField(max_length=100, unique=True)
     status = models.IntegerField(choices=TransactionStatusChoices.choices, default=TransactionStatusChoices.PENDING)
     mtn_response_data = models.JSONField(blank=True, null=True)
