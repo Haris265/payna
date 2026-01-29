@@ -57,7 +57,7 @@ class MTNService:
 
         body = {
             "amount": str(amount),
-            "currency": "EUR", 
+            "currency": "USD", 
             "externalId": f"tr_{int(time.time())}",
             "payer": {
                 "partyIdType": "MSISDN",
@@ -108,7 +108,6 @@ class MTNService:
             if response.status_code == 200:
                 return response.json()
             
-            # Agar 200 nahi aaya, to None return karne se pehle print ho chuka hai
             return None
 
         except Exception as e:
