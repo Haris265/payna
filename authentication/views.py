@@ -17,6 +17,9 @@ from rest_framework.status import (
 from core.mtn_service import (
     MTNService
 )
+from core.orange_service import (
+    OrangePaymentService
+)
 from core.choices import (
     TransactionStatusChoices
 )
@@ -308,3 +311,35 @@ class UserPaymentWithMTN(ModelViewSet):
             pass
 
         return Response({"status": "PENDING", "message": "Waiting for user approval...", "data": TransactionSerializer(transaction).data})
+
+class UserPaymentWithOrange(ModelViewSet):
+    @action(detail=False, methods=['POST'], permission_classes=[UserGeneralAuthorization])
+    def initiate_orange_payment(self, request):
+        amount = request.data.get('amount')
+        
+        if not amount:
+            return Response({"error": "Payment amount is required."}, status=HTTP_400_BAD_REQUEST)
+
+        import uuid
+        order_id = str(uuid.uuid4()) 
+        
+        ngrok_base_url = "https://d766-103-121-41-213.ngrok-free.app" 
+        
+        return_url = f"{ngrok_base_url}/payment/success/"
+        cancel_url = f"{ngrok_base_url}/payment/cancel/"
+        notif_url = f"{ngrok_base_url}/api/webhook/" 
+        
+        try:
+            result = OrangePaymentService.create_payment_url(
+                order_id, amount, return_url, cancel_url, notif_url
+            )
+            
+            if "error" in result:
+                return Response(result, status=HTTP_400_BAD_REQUEST)
+                
+            return Response(result, status=HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    
