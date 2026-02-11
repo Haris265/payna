@@ -146,6 +146,12 @@ MTN_CALLBACK_HOST = os.getenv("MTN_CALLBACK_HOST")
 MTN_API_USER_ID = os.getenv("MTN_API_USER_ID")
 MTN_API_KEY = os.getenv("MTN_API_KEY")
 
+# ORANGE PAYMENT SETTINGS
+ORANGE_AUTHORIZATION_HEADER = os.getenv("ORANGE_AUTHORIZATION_HEADER")
+ORANGE_MERCHANT_KEY = os.getenv("ORANGE_MERCHANT_KEY")
+ORANGE_AUTH_URL = "https://api.orange.com/oauth/v3/token"
+ORANGE_PAYMENT_URL = "https://api.orange.com/orange-money-webpay/dev/v1/webpayment" # Sandbox URL
+
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/3.2/ref/settings/#default-auto-field
