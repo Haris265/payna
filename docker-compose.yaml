@@ -1,0 +1,14 @@
+name: ${PROJECT_NAME}_${ENV_TYPE}
+
+services:
+  web:
+    container_name: ${PROJECT_NAME}_${ENV_TYPE}_app
+    build: .
+    command: bash -c "python manage.py runserver 0.0.0.0:9005"
+    restart: always
+    volumes:
+      - .:/payna
+    ports:
+      - "${HOST_PORT}:${CONTAINER_PORT}"
+ 
+    env_file: .env

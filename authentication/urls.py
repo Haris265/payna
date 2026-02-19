@@ -5,6 +5,7 @@ from .views import (
     UserPaymentWithMTN,
     UserPaymentWithOrange
 )
+from .views import OrangeWebhookView
 
 
 client_router = DefaultRouter()
@@ -15,4 +16,5 @@ client_router.register(r'initiate/orange', UserPaymentWithOrange, basename='init
 
 urlpatterns = [
     path('', include(client_router.urls)),
+    path('api/webhook/', OrangeWebhookView.as_view(), name='orange-webhook'),
 ]

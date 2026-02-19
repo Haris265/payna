@@ -44,3 +44,30 @@ class OrangePaymentService:
 
         response = requests.post(settings.ORANGE_PAYMENT_URL, headers=headers, json=payload)
         return response.json()
+    
+    # ---- NAYA: B2C Payment (App to User Phone) ----
+    @staticmethod
+    def send_b2c_payment(order_id, amount, phone_number):
+        token = OrangePaymentService.get_access_token()
+        if not token:
+            return {"error": "Token generate nahi ho saka."}
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+
+        # B2C api me msisdn (phone number) jata hai
+        payload = {
+            "merchant_key": settings.ORANGE_MERCHANT_KEY,
+            "currency": "OUV", 
+            "order_id": str(order_id),
+            "amount": amount,
+            "msisdn": phone_number, # <--- User ka phone number yahan jayega
+            "reference": "App_Payout"
+        }
+
+        # Dihan dein: B2C ke liye URL alag hai (settings.ORANGE_B2C_URL)
+        response = requests.post(settings.ORANGE_B2C_URL, headers=headers, json=payload)
+        return response.json()

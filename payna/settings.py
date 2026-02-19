@@ -151,6 +151,7 @@ ORANGE_AUTHORIZATION_HEADER = os.getenv("ORANGE_AUTHORIZATION_HEADER")
 ORANGE_MERCHANT_KEY = os.getenv("ORANGE_MERCHANT_KEY")
 ORANGE_AUTH_URL = "https://api.orange.com/oauth/v3/token"
 ORANGE_PAYMENT_URL = "https://api.orange.com/orange-money-webpay/dev/v1/webpayment" # Sandbox URL
+ORANGE_B2C_URL="https://api.orange.com/orange-money-b2c/dev/v1/transaction"
 
 
 # Default primary key field type
