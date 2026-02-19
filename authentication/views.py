@@ -1,10 +1,13 @@
 import os
 import uuid
+import logging
 from rest_framework.viewsets import ModelViewSet
+from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
 from django.db.models import Q  
 from rest_framework.response import Response
+from rest_framework import status
 from core.permission.user_permission import UserGeneralAuthorization
 from rest_framework.status import (
     HTTP_200_OK,
@@ -267,7 +270,7 @@ class UserPaymentWithMTN(ModelViewSet):
         if not transaction_ref_id:
             transactions = TransactionModel.objects.filter(
                 Q(sender=user) | Q(receiver=user)
-            ).order_by('-id')  
+            ).order_by('-created_at')  
             
             serializer = TransactionSerializer(transactions, many=True)
             return Response({
@@ -341,5 +344,35 @@ class UserPaymentWithOrange(ModelViewSet):
 
         except Exception as e:
             return Response({"error": str(e)}, status=HTTP_500_INTERNAL_SERVER_ERROR)
+    
+   
+
+
+class OrangeWebhookView(APIView):
+    # Orange server se request aayegi isliye auth band karna zaroori hai
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        # Orange jo data bhejay ga woh request.data mein hoga
+        orange_data = request.data
+        
+        # Terminal mein print kar ke dekhein ke Orange ne kya bheja hai
+        print("====== ORANGE WEBHOOK RECEIVED ======")
+        print(orange_data)
+        print("=====================================")
+
+        # Yahan aap check kar sakte hain:
+        payment_status = orange_data.get("status") # e.g., 'SUCCESS' or 'FAILED'
+        order_id = orange_data.get("order_id") # Jo UUID humne bheja tha
+        txnid = orange_data.get("txnid") # Orange ka transaction ID
+
+        if payment_status == "SUCCESS":
+            # TODO: Apne database mein payment ko 'Paid' mark karein
+            # Order.objects.filter(id=order_id).update(status='Paid', transaction_id=txnid)
+            pass
+        
+        # Orange ko humesha 200 OK return karna lazmi hai, warna wo retry karta rahega
+        return Response({"message": "Webhook received successfully"}, status=status.HTTP_200_OK)
     
     
