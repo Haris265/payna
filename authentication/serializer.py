@@ -24,13 +24,36 @@ class UserSignupSerializer(ModelSerializer):
         model = UserModel  
         fields = [
             "id", 
-            "full_name",     
+            "full_name",  
+            "email",   
             "phone_number",  
             "password", 
             "confirm_password", 
             "role",          
             "merchant_code"
         ]
+        extra_kwargs = {
+            "email": {
+                "required": True,
+                "allow_null": False,
+                "allow_blank": False,
+                "error_messages": {
+                    "required": "Email is required.",
+                    "null": "Email cannot be null.",
+                    "blank": "Email cannot be blank."
+                }
+            }
+        }
+
+    def validate_email(self, value):
+        """
+        Custom validation to ensure the email is unique,
+        preventing duplicate accounts.
+        """
+        value = value.strip()
+        if UserModel.objects.filter(email=value).exists():
+            raise ValidationError("This email is already registered.")
+        return value
     
     def validate_phone_number(self, value):
         """
@@ -116,4 +139,28 @@ class TransactionSerializer(serializers.ModelSerializer):
             'mtn_response_data',
             # 'created_at', 
         ]
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, min_length=8)
+    confirm_password = serializers.CharField(required=True)
+
+    def validate(self, data):
+        if data['new_password'] != data['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "New passwords do not match."})
+        return data
+
+
+class UserProfileSerializer(ModelSerializer):
+    class Meta:
+        model = UserModel
+        fields = ['full_name', 'phone_number', 'image'] 
+        
+    def validate_phone_number(self, value):
+        user_instance = self.context['request'].user_instance
+        cleaned_phone = value.strip()
+        if UserModel.objects.filter(phone_number=cleaned_phone).exclude(id=user_instance.id).exists():
+            raise ValidationError("This phone number is already registered to another account.")
+        
+        return cleaned_phone
     

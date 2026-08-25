@@ -33,7 +33,6 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
-
 # Application definition
 
 INSTALLED_APPS = [
@@ -125,6 +124,11 @@ USE_L10N = True
 
 USE_TZ = True
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://payna.hnhsofttechsolutions.com",
+    # add other trusted origins if needed
+]
+
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/3.2/howto/static-files/
@@ -152,6 +156,17 @@ ORANGE_MERCHANT_KEY = os.getenv("ORANGE_MERCHANT_KEY")
 ORANGE_AUTH_URL = "https://api.orange.com/oauth/v3/token"
 ORANGE_PAYMENT_URL = "https://api.orange.com/orange-money-webpay/dev/v1/webpayment" # Sandbox URL
 ORANGE_B2C_URL="https://api.orange.com/orange-money-b2c/dev/v1/transaction"
+
+
+# settings.py
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
+
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 
 # Default primary key field type

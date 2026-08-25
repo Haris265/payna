@@ -1,8 +1,17 @@
+import base64
+import random
+from django.core.cache import cache
+from django.core.mail import EmailMultiAlternatives
+from django.utils.html import strip_tags
+from django.conf import settings
 import os
 import uuid
 import logging
+from random import randint
+import requests
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
 from django.db.models import Q  
@@ -12,6 +21,7 @@ from core.permission.user_permission import UserGeneralAuthorization
 from rest_framework.status import (
     HTTP_200_OK,
     HTTP_400_BAD_REQUEST,
+    HTTP_404_NOT_FOUND,
     HTTP_500_INTERNAL_SERVER_ERROR,
     HTTP_403_FORBIDDEN,
     HTTP_503_SERVICE_UNAVAILABLE,
@@ -29,62 +39,148 @@ from core.choices import (
 from core.helpers import handle_serializer_exception
 from core.jwt_token import generate_jwt_payload
 from authentication.serializer import (
-    UserLoginSerializer, 
+    UserLoginSerializer,
+    UserProfileSerializer, 
     UserSignupSerializer,
     TransactionSerializer,
     MerchantQRSerializer,
-    InitiatePaymentSerializer
+    InitiatePaymentSerializer,
+    ChangePasswordSerializer
 )
 from authentication.models import (
     UserModel,
     TransactionModel
 )
+from dotenv import load_dotenv
+
+from core.utils import send_otp_email
+load_dotenv()
 
 # Create your views here.
 CLIENT_JWT_KEY = os.getenv('CLIENT_JWT_KEY')
 """JWT Token"""
 
+
+
 class UserAuthViewSet(ModelViewSet):
-    @action(detail= False,methods= ['POST']) 
+    @action(detail=False, methods=['POST']) 
     def register(self, request):
         try:
-            user_seriralizer = UserSignupSerializer(data = request.data)
+            user_seriralizer = UserSignupSerializer(data=request.data)
             if not user_seriralizer.is_valid():
-                return Response ({
+                return Response({
                     "status": False,
                     "message": handle_serializer_exception(user_seriralizer)
-                },status= HTTP_400_BAD_REQUEST)
+                }, status=HTTP_400_BAD_REQUEST)
+                
             user_instance = user_seriralizer.save()
-            token_payload = generate_jwt_payload(
-                entity_instance = user_instance,
-                roles = user_instance.role,
-                jwt_key = CLIENT_JWT_KEY
+            
+            # OTP Generation & Caching
+            otp_code = str(randint(100000, 999999))            
+            cache.set(f"otp_{user_instance.email}", otp_code, timeout=300) # 5 minutes expiry
+            
+            # Inline Email Dispatch
+            subject = 'Welcome to LibLink - Verify Your Account'
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body {{ font-family: Arial, sans-serif; background-color: #f4f7f6; padding: 20px; }}
+                    .container {{ background-color: #ffffff; padding: 30px; border-radius: 8px; max-width: 500px; margin: auto; }}
+                    .otp-box {{ background-color: #eef2f5; padding: 15px; text-align: center; font-size: 28px; font-weight: bold; letter-spacing: 5px; margin: 25px 0; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h2>LibLink Verification</h2>
+                    <p>Thank you for registering. Please use the following One-Time Password (OTP) to verify your account:</p>
+                    <div class="otp-box">{otp_code}</div>
+                    <p>This code is valid for 5 minutes.</p>
+                </div>
+            </body>
+            </html>
+            """
+            text_content = strip_tags(html_content)
+            
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=text_content,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to=[user_instance.email]
             )
-            if not token_payload["status"]:
-                user_instance.delete()
-                return Response ({
-                    "status": False,
-                    "message": token_payload["message"],
-                    "details": token_payload["details"]
-                },status= HTTP_500_INTERNAL_SERVER_ERROR)
+            msg.attach_alternative(html_content, "text/html")
+            msg.send()
+
+            # Response Formatting
             response_data = user_seriralizer.data
-            if user_instance.date_joined:
-                response_data['created_at'] = user_instance.date_joined
-            else:
-                response_data['created_at'] = None
-            return Response ({
+            response_data['created_at'] = user_instance.date_joined if user_instance.date_joined else None
+            
+            return Response({
                 "status": True,
-                "message": "User created successfully",
-                "access_token": token_payload["access_token"],
-                "refresh_token": token_payload["refresh_token"],
-                # "data": user_seriralizer.data
+                "message": "User created successfully. OTP has been sent to the registered email.",                
                 "data": response_data
-            },status= HTTP_200_OK)
+            }, status=HTTP_200_OK)
+            
         except Exception as swr:
             return Response({
                 "status": False, 
                 "message": str(swr)
-            },status=HTTP_500_INTERNAL_SERVER_ERROR,)
+            }, status=HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['POST'])
+    def verify_otp(self, request):
+        try:
+            email = request.data.get('email')
+            otp = request.data.get('otp')
+
+            if not email or not otp:
+                return Response({
+                    "status": False,
+                    "message": "Email and OTP are required."
+                }, status=HTTP_400_BAD_REQUEST)
+
+            cached_otp = cache.get(f"otp_{email}")
+
+            if not cached_otp:
+                return Response({
+                    "status": False,
+                    "message": "OTP has expired or is invalid. Please request a new one."
+                }, status=HTTP_400_BAD_REQUEST)
+
+            if str(cached_otp) != str(otp):
+                return Response({
+                    "status": False,
+                    "message": "Invalid OTP. Please try again."
+                }, status=HTTP_400_BAD_REQUEST)
+
+            try:
+                # User ko find karein (UserModel ki jagah apna model name use karein agar zaroorat ho)
+                user_instance = UserModel.objects.get(email=email)
+                
+                # Zaroori Step: User ko active/verified mark kar dein taake wo login kar sake
+                user_instance.is_active = True 
+                user_instance.save()
+
+                # Cache se OTP hata dein
+                cache.delete(f"otp_{email}")
+
+                return Response({
+                    "status": True,
+                    "message": "Account verified successfully. You can now proceed to login."
+                }, status=HTTP_200_OK)
+
+            except UserModel.DoesNotExist:
+                return Response({
+                    "status": False,
+                    "message": "User not found."
+                }, status=HTTP_404_NOT_FOUND)
+
+        except Exception as e:
+            return Response({
+                "status": False,
+                "message": str(e)
+            }, status=HTTP_500_INTERNAL_SERVER_ERROR)
             
    
     """User Login with model view set with token"""
@@ -123,6 +219,7 @@ class UserAuthViewSet(ModelViewSet):
                     "id":user_data.id,
                     "first_name":user_data.full_name,
                     "phone_number":user_data.phone_number,
+                    "email":user_data.email,
                     "role":user_data.role,
                     # "image": user_data.image.url if user_data.image else None,
                     "image": image_url,
@@ -133,8 +230,372 @@ class UserAuthViewSet(ModelViewSet):
             return Response({
                 "status": False, "message": str(swr)
                 },status=HTTP_500_INTERNAL_SERVER_ERROR,)
+
+    @action(detail=False, methods=['POST'], permission_classes=[UserGeneralAuthorization])
+    def change_password(self, request):
+        try:
+            user = request.user_instance
+            serializer = ChangePasswordSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response({
+                    "status": False,
+                    "message": handle_serializer_exception(serializer) 
+                }, status=HTTP_400_BAD_REQUEST)
+                
+            old_password = serializer.validated_data.get("old_password")
+            new_password = serializer.validated_data.get("new_password")
+            
+            if not user.check_password(old_password):
+                return Response({
+                    "status": False,
+                    "message": "Old password is incorrect."
+                }, status=HTTP_400_BAD_REQUEST)
+                
+            user.set_password(new_password)
+            user.save()
+            
+            return Response({
+                "status": True,
+                "message": "Password changed successfully."
+            }, status=HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({
+                "status": False,
+                "message": str(e)
+            }, status=HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['POST'])
+    def forgot_password(self, request):
+        try:
+            email = request.data.get('email')
+            if not email:
+                return Response({"status": False, "message": "Email is required."}, status=HTTP_400_BAD_REQUEST)
+
+            try:
+                user_instance = UserModel.objects.get(email=email)
+            except UserModel.DoesNotExist:
+                return Response({"status": False, "message": "No account found with this email."}, status=HTTP_404_NOT_FOUND)
+
+            otp_code = str(randint(100000, 999999))            
+            cache.set(f"reset_otp_{email}", otp_code, timeout=300) # 5 minutes expiry
+            
+            subject = 'LibLink - Password Reset Request'
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <body>
+                <h2>Password Reset</h2>
+                <p>Hello {user_instance.full_name},</p>
+                <p>Your password reset OTP is: <strong>{otp_code}</strong></p>
+                <p>This code is valid for 5 minutes.</p>
+            </body>
+            </html>
+            """
+            text_content = strip_tags(html_content)
+            
+            msg = EmailMultiAlternatives(subject=subject, body=text_content, from_email=settings.DEFAULT_FROM_EMAIL, to=[email])
+            msg.attach_alternative(html_content, "text/html")
+            msg.send()
+
+            return Response({
+                "status": True,
+                "message": "Password reset OTP has been sent to your email."
+            }, status=HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"status": False, "message": str(e)}, status=HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['POST'])
+    def verify_reset_otp(self, request):
+        try:
+            email = request.data.get('email')
+            otp = request.data.get('otp')
+
+            if not email or not otp:
+                return Response({"status": False, "message": "Email and OTP are required."}, status=HTTP_400_BAD_REQUEST)
+
+            cached_otp = cache.get(f"reset_otp_{email}")
+
+            if not cached_otp:
+                return Response({
+                    "status": False,
+                    "message": "OTP has expired or is invalid. Please request a new one."
+                }, status=HTTP_400_BAD_REQUEST)
+
+            if str(cached_otp) != str(otp):
+                return Response({"status": False, "message": "Invalid OTP. Please try again."}, status=HTTP_400_BAD_REQUEST)
+
+            cache.delete(f"reset_otp_{email}")
+            
+            cache.set(f"allow_reset_{email}", True, timeout=600)
+
+            return Response({
+                "status": True,
+                "message": "OTP verified successfully. You can now set a new password."
+            }, status=HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"status": False, "message": str(e)}, status=HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['POST'])
+    def set_new_password(self, request):
+        try:
+            email = request.data.get('email')
+            new_password = request.data.get('new_password')
+            confirm_password = request.data.get('confirm_password')
+
+            if not all([email, new_password, confirm_password]):
+                return Response({
+                    "status": False, 
+                    "message": "Email, new_password, and confirm_password are required."
+                }, status=HTTP_400_BAD_REQUEST)
+
+            if new_password != confirm_password:
+                return Response({"status": False, "message": "Passwords do not match."}, status=HTTP_400_BAD_REQUEST)
+
+            if len(new_password) < 8:
+                return Response({"status": False, "message": "Password must be at least 8 characters long."}, status=HTTP_400_BAD_REQUEST)
+
+            is_reset_allowed = cache.get(f"allow_reset_{email}")
+
+            if not is_reset_allowed:
+                return Response({
+                    "status": False,
+                    "message": "Session expired or OTP not verified. Please restart the password reset process."
+                }, status=HTTP_400_BAD_REQUEST)
+
+            # User ka password update karein
+            try:
+                user_instance = UserModel.objects.get(email=email)
+                user_instance.set_password(new_password)
+                user_instance.save()
+
+                cache.delete(f"allow_reset_{email}")
+
+                return Response({
+                    "status": True,
+                    "message": "Your password has been reset successfully. You can now login."
+                }, status=HTTP_200_OK)
+
+            except UserModel.DoesNotExist:
+                return Response({"status": False, "message": "User not found."}, status=HTTP_404_NOT_FOUND)
+
+        except Exception as e:
+            return Response({"status": False, "message": str(e)}, status=HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['GET'], permission_classes=[UserGeneralAuthorization])
+    def get_profile(self, request):
+        try:
+            user_instance = request.user_instance
+            base_url = "https://payna.hnhsofttechsolutions.com"
+            image_url = None
+            if user_instance.image:
+                image_url = f"{base_url}{user_instance.image.url}"
+                
+            return Response({
+                "status": True,
+                "message": "Profile retrieve successfully",
+                "data": {
+                    "id": user_instance.id,
+                    "first_name": user_instance.full_name,
+                    "phone_number": user_instance.phone_number,
+                    "email": user_instance.email,
+                    "role": user_instance.role,
+                    "image": image_url,
+                    "created_at": user_instance.date_joined,                    
+                    "is_active": user_instance.is_active
+                }
+            }, status=HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({
+                "status": False, 
+                "message": str(e)
+            }, status=HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+    @action(detail=False, methods=['PUT', 'PATCH'], permission_classes=[UserGeneralAuthorization])
+    def update_profile(self, request):
+        try:
+            user_instance = request.user_instance
+            
+            serializer = UserProfileSerializer(
+                user_instance, 
+                data=request.data, 
+                partial=True, 
+                context={'request': request} 
+            )
+            
+            if not serializer.is_valid():
+                return Response({
+                    "status": False,
+                    "message": handle_serializer_exception(serializer)
+                }, status=HTTP_400_BAD_REQUEST)
+                
+            updated_user = serializer.save()
+            
+            base_url = "https://payna.hnhsofttechsolutions.com"
+            image_url = None
+            if updated_user.image:
+                image_url = f"{base_url}{updated_user.image.url}"
+                
+            return Response({
+                "status": True,
+                "message": "Profile updated successfully",
+                "data": {
+                    "id": updated_user.id,
+                    "first_name": updated_user.full_name,
+                    "phone_number": updated_user.phone_number,
+                    "email": updated_user.email,
+                    "role": updated_user.role,
+                    "image": image_url,
+                    "created_at": updated_user.date_joined,                    
+                    "is_active": updated_user.is_active
+                }
+            }, status=HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({
+                "status": False, 
+                "message": str(e)
+            }, status=HTTP_500_INTERNAL_SERVER_ERROR)
         
 class UserPaymentWithMTN(ModelViewSet):
+    COLLECT_KEY = os.getenv('MTN_COLLECTION_SUB_KEY')
+    DISBURSE_KEY = os.getenv('MTN_DISBURSEMENT_SUB_KEY')
+    API_USER = os.getenv('MTN_API_USER_ID')
+    API_KEY = os.getenv('MTN_API_KEY')
+    BASE_URL = os.getenv('MTN_BASE_URL')
+    ENV = os.getenv('MTN_ENVIRONMENT')
+    NGROK = os.getenv('MTN_NGROK_URL')
+
+    def _get_token(self, product):
+        """Helper to get Access Token based on product type"""
+        sub_key = self.COLLECT_KEY if product == 'collection' else self.DISBURSE_KEY
+        auth_str = f"{self.API_USER}:{self.API_KEY}"
+        encoded_auth = base64.b64encode(auth_str.encode()).decode()
+        
+        url = f"{self.BASE_URL}/{product}/token/"
+        headers = {
+            "Ocp-Apim-Subscription-Key": sub_key,
+            "Authorization": f"Basic {encoded_auth}"
+        }
+        
+        try:
+            res = requests.post(url, headers=headers)
+            if res.status_code == 200:
+                return res.json().get('access_token'), sub_key
+        except Exception as e:
+            print(f"Token Error: {str(e)}")
+        return None, None
+
+    # 1. COLLECT: User ke mobile par offline PIN prompt bhejega
+    @action(detail=False, methods=['post'])
+    def collect(self, request):
+        phone = request.data.get('phone')
+        amount = request.data.get('amount')
+        
+        token, sub_key = self._get_token('collection')
+        if not token:
+            return Response({"error": "Auth Failed"}, status=401)
+            
+        ref_id = str(uuid.uuid4())
+        url = f"{self.BASE_URL}/collection/v1_0/requesttopay"
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Reference-Id": ref_id,
+            "X-Target-Environment": self.ENV, # Sandbox mein 'sandbox' hona chahiye
+            "Ocp-Apim-Subscription-Key": sub_key,
+            # IMPORTANT: Sandbox mein ye URL aksar ignored hota hai agar Host match na kare
+            "X-Callback-Url": f"{self.NGROK}/authentication/v1/initiate/mtn/callback/",            
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "amount": amount, 
+            "currency": "EUR", # Sandbox sirf EUR accept karta hai
+            "externalId": str(uuid.uuid4().hex[:10]),
+            "payer": {"partyIdType": "MSISDN", "partyId": phone},
+            "payerMessage": "Testing MTN Payment", 
+            "payeeNote": "Django Sandbox Test"
+        }
+        
+        res = requests.post(url, json=payload, headers=headers)
+
+        if res.status_code == 202:
+            # Pakistan mein baith kar test karne ke liye ye Ref ID bohot zaroori hai
+            return Response({
+                "reference_id": ref_id, 
+                "status": "Initiated",
+                "instruction": "Ab is reference_id ko MTN Sandbox tool mein approve karein"
+            }, status=202)
+        return Response({"error": "Failed", "raw": res.text}, status=res.status_code)
+
+    # 2. CALLBACK: MTN khud is URL ko hit karega jab payment ho jayegi
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def callback(self, request):
+        # Yeh terminal mein print hoga jab payment confirm hogi
+        print("!!! MTN NOTIFICATION RECEIVED !!!")
+        print("Transaction Data:", request.data)
+        
+        status_received = request.data.get('status')
+        if status_received == 'SUCCESSFUL':
+            # Yahan aap Database update kar sakte hain
+            print("Payment Successful in DB!")
+            
+        return Response({"status": "Accepted"}, status=200)
+
+    # 3. CHECK STATUS: Manual check karne ke liye
+    @action(detail=False, methods=['get'])
+    def check_status(self, request):
+        ref_id = request.query_params.get('ref_id')
+        token, sub_key = self._get_token('collection')
+        
+        url = f"{self.BASE_URL}/collection/v1_0/requesttopay/{ref_id}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Target-Environment": self.ENV,
+            "Ocp-Apim-Subscription-Key": sub_key,
+        }
+        
+        res = requests.get(url, headers=headers)
+        return Response(res.json() if res.status_code == 200 else {"error": res.text})
+
+    # 4. DISBURSE: Kisi user ko paise bhejna
+    @action(detail=False, methods=['post'])
+    def disburse(self, request):
+        phone = request.data.get('phone')
+        amount = request.data.get('amount')
+        
+        token, sub_key = self._get_token('disbursement')
+        if not token:
+            return Response({"error": "Auth Failed"}, status=401)
+
+        ref_id = str(uuid.uuid4())
+        url = f"{self.BASE_URL}/disbursement/v1_0/transfer"
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Reference-Id": ref_id,
+            "X-Target-Environment": self.ENV,
+            "Ocp-Apim-Subscription-Key": sub_key,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "amount": amount, "currency": "EUR",
+            "externalId": str(uuid.uuid4().hex[:10]),
+            "payee": {"partyIdType": "MSISDN", "partyId": phone},
+            "payerMessage": "Payout sent", "payeeNote": "Transfer"
+        }
+        
+        res = requests.post(url, json=payload, headers=headers)
+        if res.status_code == 202:
+            return Response({"status": "Sent", "reference_id": ref_id}, status=202)
+        return Response(res.json(), status=res.status_code)
+    
     @action(detail=False, methods=["GET"], permission_classes=[UserGeneralAuthorization])
     def my_qr(self, request):
         if request.user_instance.role != UserModel.Role.MERCHANT:
