@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
-from django.db.models import Q  
+from django.db.models import Q, Sum  
 from rest_framework.response import Response
 from rest_framework import status
 from core.permission.user_permission import UserGeneralAuthorization
@@ -206,10 +206,20 @@ class UserAuthViewSet(ModelViewSet):
             # image_url = None
             # if user_data.image:
             #     image_url = request.build_absolute_uri(user_data.image.url)
-            base_url = "https://jj2lk5nn-8000.asse.devtunnels.ms"
+            # base_url = "https://jj2lk5nn-8000.asse.devtunnels.ms"
+            # image_url = None
+            # if user_data.image:
+            #     image_url = f"{base_url}{user_data.image.url}"
+            
+            # Dynamic Image URL
             image_url = None
             if user_data.image:
-                image_url = f"{base_url}{user_data.image.url}"
+                image_url = request.build_absolute_uri(user_data.image.url)
+                
+            # Dynamic QR Code URL
+            qr_code_url = None
+            if hasattr(user_data, 'qr_code') and user_data.qr_code:
+                qr_code_url = request.build_absolute_uri(user_data.qr_code.url)
             return Response({
                 "status": True,
                 "message": message,
@@ -223,6 +233,7 @@ class UserAuthViewSet(ModelViewSet):
                     "role":user_data.role,
                     # "image": user_data.image.url if user_data.image else None,
                     "image": image_url,
+                    "qr_code": qr_code_url,
                     "created_at": user_data.date_joined,                    
                     "is_active":user_data.is_active}
                     },status= HTTP_200_OK)  
@@ -459,6 +470,63 @@ class UserAuthViewSet(ModelViewSet):
             return Response({
                 "status": False, 
                 "message": str(e)
+            }, status=HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['GET'], permission_classes=[UserGeneralAuthorization])
+    def get_my_qr(self, request):
+        try:
+            user = request.user_instance  
+            
+            if not user.qr_code:
+                return Response({
+                    "status": False,
+                    "message": "QR Code not found for this user."
+                }, status=HTTP_404_NOT_FOUND)
+
+            qr_code_url = request.build_absolute_uri(user.qr_code.url)
+
+            return Response({
+                "status": True,
+                "message": "QR Code fetched successfully.",
+                "data": {
+                    "id": user.id,
+                    "full_name": user.full_name,
+                    "phone_number": user.phone_number,
+                    "role": user.role,
+                    "merchant_code": user.merchant_code,
+                    "qr_code_url": qr_code_url  
+                }
+            }, status=HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "status": False,
+                "message": str(e)
+            }, status=HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['GET'], permission_classes=[UserGeneralAuthorization])
+    def merchant_dashboard(self, request):
+        try:
+            user_instance = request.user_instance
+            
+            total_received = TransactionModel.objects.filter(
+                receiver=user_instance
+            ).aggregate(total=Sum('amount'))['total']
+
+            total_amount = total_received if total_received is not None else 0.0
+
+            return Response({
+                "status": True,
+                "message": "Dashboard data fetched successfully",
+                "data": {
+                    "total_amount": total_amount
+                }
+            }, status=HTTP_200_OK)
+
+        except Exception as swr:
+            return Response({
+                "status": False, 
+                "message": str(swr)
             }, status=HTTP_500_INTERNAL_SERVER_ERROR)
         
 class UserPaymentWithMTN(ModelViewSet):

@@ -1,4 +1,10 @@
+import json
+import string
+import random
 import uuid
+import qrcode
+from io import BytesIO
+from django.core.files.base import ContentFile
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.contrib.auth.hashers import make_password
@@ -75,10 +81,46 @@ class UserModel(AbstractUser):
         validators=[FileExtensionValidator(allowed_extensions=['jpg', 'jpeg', 'png', 'webp'])],
         verbose_name="Profile Image", default="/profile/image/1.jpg"
     )
+    qr_code = models.ImageField(
+        upload_to='profile/qr_codes/', 
+        blank=True, 
+        null=True, 
+        verbose_name="Payment QR Code"
+    )
     def save(self, *args, **kwargs):
         """Password is hashed before saving"""
         if self.password and not self.password.startswith("pbkdf2_sha256$"):
             self.password = make_password(self.password)
+
+        if self.role == self.Role.MERCHANT and not self.merchant_code:
+            random_number = ''.join(random.choices(string.digits, k=6))
+            self.merchant_code = f"MTN-{random_number}"
+
+        if not self.qr_code:
+            qr_data = {
+                "user_id": str(self.id),
+                "phone_number": self.phone_number,
+                "name": self.full_name,
+                "role": self.role,
+                "merchant_code": self.merchant_code or ""
+            }
+            
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(json.dumps(qr_data))
+            qr.make(fit=True)
+            
+            img = qr.make_image(fill_color="black", back_color="white")
+            
+            buffer = BytesIO()
+            img.save(buffer, format="PNG")
+            
+            file_name = f"qr_{self.phone_number}.png"
+            self.qr_code.save(file_name, ContentFile(buffer.getvalue()), save=False)
         super().save(*args, **kwargs)
     
     USERNAME_FIELD = "phone_number"
